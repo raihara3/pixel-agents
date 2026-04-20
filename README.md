@@ -70,6 +70,24 @@ npm run build
 
 Then press **F5** in VS Code to launch the Extension Development Host.
 
+### Package as a `.vsix`
+
+To build a standalone extension package (useful for local installs, CI artifacts, or distribution outside the marketplace):
+
+```bash
+npx @vscode/vsce package
+```
+
+`vsce package` runs the `vscode:prepublish` script (`npm run package`) automatically, which performs type-checking, linting, a production esbuild of the extension, and a Vite build of the webview. The command emits `pixel-agents-<version>.vsix` in the repository root. The `.vscodeignore` file controls which files are included in the bundle.
+
+Install the generated package into VS Code with:
+
+```bash
+code --install-extension pixel-agents-<version>.vsix
+```
+
+You can also install it from the UI via **Extensions → ··· menu → Install from VSIX…**.
+
 ### Usage
 
 1. Open the **Pixel Agents** panel (it appears in the bottom panel area alongside your terminal)
@@ -144,7 +162,6 @@ For this to work, the architecture needs to be modular at every level:
 - **Theme-agnostic**: community-created assets, skins, and themes from any contributor.
 
 We're actively working on the core module and adapter architecture that makes this possible. If you're interested to talk about this further, please visit our [Discussions Section](https://github.com/pablodelucca/pixel-agents/discussions).
-
 
 ## Community & Contributing
 
