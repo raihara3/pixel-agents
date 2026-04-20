@@ -162,6 +162,8 @@ export interface Character {
   isActive: boolean;
   /** Assigned seat uid, or null if no seat */
   seatId: string | null;
+  /** Temporary rest-target seat uid while idle, or null. Never equal to seatId. */
+  restSeatId: string | null;
   /** Active speech bubble type, or null if none showing */
   bubbleType: 'permission' | 'waiting' | null;
   /** Countdown timer for bubble (waiting: 2→0, permission: unused) */
