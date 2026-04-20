@@ -704,6 +704,7 @@ export function scanForTeammateFiles(
     webview?.postMessage({
       type: 'agentCreated',
       id,
+      isExternal: true,
       isTeammate: true,
       teammateName,
       parentAgentId,
@@ -910,7 +911,7 @@ export function adoptExternalSessionFromHook(
         `[Pixel Agents] Hook: Agent ${id} - detected hooks-only external session${folderName ? ` (${folderName})` : ''}`,
       );
     }
-    webview?.postMessage({ type: 'agentCreated', id, folderName });
+    webview?.postMessage({ type: 'agentCreated', id, isExternal: true, folderName });
     onAgentCreated?.(agent);
   }
 }

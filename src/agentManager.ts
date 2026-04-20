@@ -574,12 +574,15 @@ export function sendCurrentAgentStatuses(
         toolName,
       });
     }
-    // Re-send waiting status
+    // Re-send waiting status. `isReplay` tells the webview this is a state
+    // rehydration (panel reopen / webview reinit), so the notification sound
+    // should not be replayed.
     if (agent.isWaiting) {
       webview.postMessage({
         type: 'agentStatus',
         id: agentId,
         status: 'waiting',
+        isReplay: true,
       });
     }
     // Re-send team metadata

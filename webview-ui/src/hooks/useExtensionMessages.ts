@@ -107,6 +107,13 @@ export function useExtensionMessages(
 
   // Track whether initial layout has been loaded (ref to avoid re-render)
   const layoutReadyRef = useRef(false);
+  // Agents adopted from external sources (other windows' terminals, standalone CLI,
+  // editor-side sessions). Sound notifications are suppressed for these so only
+  // agents launched from this window's "+ Agent" button ring the chime.
+  const externalAgentIdsRef = useRef<Set<number>>(new Set());
+  // Last seen status per agent. Used to suppress duplicate waiting notifications
+  // (e.g. replays from sendCurrentAgentStatuses or back-to-back hook + JSONL paths).
+  const lastAgentStatusRef = useRef<Record<number, string>>({});
 
   useEffect(() => {
     // Buffer agents from existingAgents until layout is loaded
@@ -153,10 +160,14 @@ export function useExtensionMessages(
       } else if (msg.type === 'agentCreated') {
         const id = msg.id as number;
         const folderName = msg.folderName as string | undefined;
+        const isExternal = msg.isExternal as boolean | undefined;
         const isTeammate = msg.isTeammate as boolean | undefined;
         const teammateName = msg.teammateName as string | undefined;
         const teammateParentId = msg.parentAgentId as number | undefined;
         const teamName = msg.teamName as string | undefined;
+        if (isExternal) {
+          externalAgentIdsRef.current.add(id);
+        }
         setAgents((prev) => (prev.includes(id) ? prev : [...prev, id]));
         // Don't auto-select teammates (keep focus on lead)
         if (!isTeammate) {
@@ -182,6 +193,8 @@ export function useExtensionMessages(
         saveAgentSeats(os);
       } else if (msg.type === 'agentClosed') {
         const id = msg.id as number;
+        externalAgentIdsRef.current.delete(id);
+        delete lastAgentStatusRef.current[id];
         setAgents((prev) => prev.filter((a) => a !== id));
         setSelectedAgent((prev) => (prev === id ? null : prev));
         setAgentTools((prev) => {
@@ -213,6 +226,12 @@ export function useExtensionMessages(
           { palette?: number; hueShift?: number; seatId?: string }
         >;
         const folderNames = (msg.folderNames || {}) as Record<number, string>;
+        const externalAgents = (msg.externalAgents || {}) as Record<number, boolean>;
+        for (const id of incoming) {
+          if (externalAgents[id]) {
+            externalAgentIdsRef.current.add(id);
+          }
+        }
         // Buffer agents — they'll be added in layoutLoaded after seats are built
         for (const id of incoming) {
           const m = meta[id];
@@ -322,6 +341,8 @@ export function useExtensionMessages(
       } else if (msg.type === 'agentStatus') {
         const id = msg.id as number;
         const status = msg.status as string;
+        const isReplay = msg.isReplay === true;
+        const previousStatus = lastAgentStatusRef.current[id];
         setAgentStatuses((prev) => {
           if (status === 'active') {
             if (!(id in prev)) return prev;
@@ -331,10 +352,21 @@ export function useExtensionMessages(
           }
           return { ...prev, [id]: status };
         });
+        if (status === 'active') {
+          delete lastAgentStatusRef.current[id];
+        } else {
+          lastAgentStatusRef.current[id] = status;
+        }
         os.setAgentActive(id, status === 'active');
         if (status === 'waiting') {
           os.showWaitingBubble(id);
-          playDoneSound();
+          // Play the chime only for agents launched from this window's "+ Agent"
+          // button, and only on a fresh transition into waiting. This prevents
+          // duplicate beeps across windows that adopted the same session and
+          // suppresses replays from sendCurrentAgentStatuses on panel reopen.
+          if (!isReplay && previousStatus !== 'waiting' && !externalAgentIdsRef.current.has(id)) {
+            playDoneSound();
+          }
         }
       } else if (msg.type === 'agentToolPermission') {
         const id = msg.id as number;
@@ -347,7 +379,11 @@ export function useExtensionMessages(
           };
         });
         os.showPermissionBubble(id);
-        playPermissionSound();
+        // Same ownership filter as playDoneSound — external agents belong to
+        // another window, so we don't beep for their permission prompts here.
+        if (!externalAgentIdsRef.current.has(id)) {
+          playPermissionSound();
+        }
       } else if (msg.type === 'subagentToolPermission') {
         const id = msg.id as number;
         const parentToolId = msg.parentToolId as string;
