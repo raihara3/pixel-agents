@@ -160,6 +160,9 @@ export interface Character {
   wanderLimit: number;
   /** Whether the agent is actively working */
   isActive: boolean;
+  /** True between turn completion and the start of the next turn. Distinct
+   *  from !isActive — an agent that has never run is idle but not waiting. */
+  isWaiting: boolean;
   /** Assigned seat uid, or null if no seat */
   seatId: string | null;
   /** Temporary rest-target seat uid while idle, or null. Never equal to seatId. */

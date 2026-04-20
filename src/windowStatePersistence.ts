@@ -16,6 +16,9 @@ export interface WindowAgentSnapshot {
   hueShift: number;
   seatId: string | null;
   isActive: boolean;
+  /** Persistent turn-completion flag (distinct from the transient waiting
+   *  bubbleType sprite). Drives remote ☕️ overlay labels. */
+  isWaiting: boolean;
   currentTool: string | null;
   bubbleType: 'permission' | 'waiting' | null;
 }

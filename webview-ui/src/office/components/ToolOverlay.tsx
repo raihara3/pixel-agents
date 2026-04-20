@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 
 import { Button } from '../../components/ui/Button.js';
 import {
+  ACTIVITY_IDLE_LABEL,
+  ACTIVITY_PERMISSION_LABEL,
+  ACTIVITY_WAITING_LABEL,
   CHARACTER_SITTING_OFFSET_PX,
   FUEL_COLOR_CRITICAL,
   FUEL_COLOR_DANGER,
@@ -20,6 +23,7 @@ import {
 } from '../../constants.js';
 import type { SubagentCharacter } from '../../hooks/useExtensionMessages.js';
 import type { OfficeState } from '../engine/officeState.js';
+import { extractToolName, shortToolLabel, USER_ACTION_TOOLS } from '../toolUtils.js';
 import type { ToolActivity } from '../types.js';
 import { CharacterState, TILE_SIZE } from '../types.js';
 
@@ -35,40 +39,60 @@ interface ToolOverlayProps {
   alwaysShowOverlay: boolean;
 }
 
-/** Derive a short human-readable activity string from tools/status */
+/** Map an activity status (tool output from formatToolStatus) to a short
+ *  single-word label so overlays stay readable when many avatars overlap. */
+function shortStatusLabel(status: string): string {
+  const toolName = extractToolName(status);
+  return shortToolLabel(toolName) ?? status.split(/[\s:]/)[0] ?? status;
+}
+
+/** Derive a short human-readable activity string from tools/status.
+ *  Priority: permission/user-input (🖐️) → active tool (gerund) →
+ *  just-finished turn (☕️) → idle. */
 function getActivityText(
   agentId: number,
   agentTools: Record<number, ToolActivity[]>,
   isActive: boolean,
+  isWaiting: boolean,
 ): string {
   const tools = agentTools[agentId];
   if (tools && tools.length > 0) {
-    // Find the latest non-done tool
     const activeTool = [...tools].reverse().find((t) => !t.done);
     if (activeTool) {
-      if (activeTool.permissionWait) return 'Needs approval';
-      return activeTool.status;
+      const toolName = extractToolName(activeTool.status);
+      if (activeTool.permissionWait || (toolName && USER_ACTION_TOOLS.has(toolName))) {
+        return ACTIVITY_PERMISSION_LABEL;
+      }
+      return shortStatusLabel(activeTool.status);
     }
-    // All tools done but agent still active (mid-turn) — keep showing last tool status
+    // All tools done but agent still active (mid-turn) — keep showing last tool
     if (isActive) {
       const lastTool = tools[tools.length - 1];
-      if (lastTool) return lastTool.status;
+      if (lastTool) return shortStatusLabel(lastTool.status);
     }
   }
 
-  return 'Idle';
+  if (isWaiting) return ACTIVITY_WAITING_LABEL;
+  return ACTIVITY_IDLE_LABEL;
 }
 
 /** Remote (mirrored) agents don't have a detailed tool-activity list, so the
  *  overlay is derived entirely from their mirrored scalar fields. */
 function getRemoteActivityText(ch: {
   isActive: boolean;
+  isWaiting: boolean;
   currentTool: string | null;
   bubbleType: 'permission' | 'waiting' | null;
 }): string {
-  if (ch.bubbleType === 'permission') return 'Needs approval';
-  if (!ch.isActive) return 'Idle';
-  return ch.currentTool ?? 'Working';
+  if (ch.bubbleType === 'permission') return ACTIVITY_PERMISSION_LABEL;
+  if (ch.currentTool && USER_ACTION_TOOLS.has(ch.currentTool)) {
+    return ACTIVITY_PERMISSION_LABEL;
+  }
+  if (ch.isActive) {
+    return shortToolLabel(ch.currentTool) ?? ACTIVITY_IDLE_LABEL;
+  }
+  if (ch.isWaiting) return ACTIVITY_WAITING_LABEL;
+  return ACTIVITY_IDLE_LABEL;
 }
 
 function getFuelColor(ratio: number): string {
@@ -151,13 +175,13 @@ export function ToolOverlay({
           activityText = getRemoteActivityText(ch);
         } else if (isSub) {
           if (subHasPermission) {
-            activityText = 'Needs approval';
+            activityText = ACTIVITY_PERMISSION_LABEL;
           } else {
             const sub = subagentCharacters.find((s) => s.id === id);
             activityText = sub ? sub.label : 'Subtask';
           }
         } else {
-          activityText = getActivityText(id, agentTools, ch.isActive);
+          activityText = getActivityText(id, agentTools, ch.isActive, ch.isWaiting);
         }
 
         // Determine dot color. Remote agents don't have a tool-activity list;

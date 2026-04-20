@@ -358,6 +358,7 @@ export function useExtensionMessages(
           lastAgentStatusRef.current[id] = status;
         }
         os.setAgentActive(id, status === 'active');
+        os.setAgentWaiting(id, status === 'waiting');
         if (status === 'waiting') {
           os.showWaitingBubble(id);
           // Play the chime only for agents launched from this window's "+ Agent"
@@ -575,6 +576,7 @@ export function useExtensionMessages(
           hueShift: ch.hueShift,
           seatId: ch.seatId,
           isActive: ch.isActive,
+          isWaiting: ch.isWaiting,
           currentTool: ch.currentTool,
           bubbleType: ch.bubbleType,
         });

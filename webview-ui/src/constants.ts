@@ -135,6 +135,13 @@ export const AUTO_ON_SIDE_DEPTH = 2;
 export const CHARACTER_HIT_HALF_WIDTH = 8;
 export const CHARACTER_HIT_HEIGHT = 24;
 export const TOOL_OVERLAY_VERTICAL_OFFSET = 32;
+// ── Activity labels (shown in ToolOverlay) ──────────────────
+export const ACTIVITY_IDLE_LABEL = 'Idle';
+// Rendered when the agent needs the user (permission prompt, AskUserQuestion).
+export const ACTIVITY_PERMISSION_LABEL = '🖐️';
+// Rendered after the agent finishes a turn; distinguishes a post-task break
+// from a never-started idle state.
+export const ACTIVITY_WAITING_LABEL = '☕️';
 
 // ── Agent Teams ─────────────────────────────────────────────
 export const MAX_CONTEXT_TOKENS = 200_000;

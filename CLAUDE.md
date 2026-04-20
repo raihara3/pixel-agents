@@ -73,7 +73,7 @@ webview-ui/src/               — React + TypeScript (Vite)
       matrixEffect.ts         — Matrix-style spawn/despawn digital rain effect
     components/
       OfficeCanvas.tsx        — Canvas, resize, DPR, mouse hit-testing, edit interactions, drag-to-move
-      ToolOverlay.tsx          — Activity status label above hovered/selected character + close button
+      ToolOverlay.tsx          — Activity status label above hovered/selected character + close button (short gerund labels via shortToolLabel, 🖐️ on permission/AskUserQuestion, ☕️ when character.isWaiting, 'Idle' otherwise)
 
 scripts/                      — 7-stage asset extraction pipeline
   0-import-tileset.ts         — Interactive CLI wrapper

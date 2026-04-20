@@ -41,6 +41,10 @@ export interface RemoteAgentInput {
   hueShift: number;
   seatId: string | null;
   isActive: boolean;
+  /** True after the agent's last turn completed, cleared when it goes active
+   *  again. Lets remote overlays distinguish a just-finished break (☕️) from
+   *  a never-started idle. */
+  isWaiting: boolean;
   currentTool: string | null;
   bubbleType: 'permission' | 'waiting' | null;
 }
@@ -588,6 +592,10 @@ export class OfficeState {
     const ch = this.characters.get(id);
     if (ch) {
       ch.isActive = active;
+      if (active) {
+        // Going active implicitly ends any prior "just finished" state.
+        ch.isWaiting = false;
+      }
       if (!active) {
         // Sentinel -1: signals turn just ended, skip next seat rest timer.
         // Prevents the WALK handler from setting a 2-4 min rest on arrival.
@@ -597,6 +605,13 @@ export class OfficeState {
       }
       this.rebuildFurnitureInstances();
     }
+  }
+
+  /** Mark agent as waiting (turn just ended). Cleared automatically when the
+   *  agent returns to active. Drives the ☕️ overlay label. */
+  setAgentWaiting(id: number, waiting: boolean): void {
+    const ch = this.characters.get(id);
+    if (ch) ch.isWaiting = waiting;
   }
 
   /** Rebuild furniture instances with auto-state applied (active agents turn electronics ON) */
@@ -891,6 +906,7 @@ export class OfficeState {
     const ch = createCharacter(id, agent.palette, agent.seatId, seat, agent.hueShift);
     ch.folderName = repoName;
     ch.isActive = agent.isActive;
+    ch.isWaiting = agent.isWaiting ?? false;
     ch.currentTool = agent.currentTool;
     ch.bubbleType = agent.bubbleType;
     if (agent.bubbleType === 'waiting') {
@@ -905,6 +921,7 @@ export class OfficeState {
   private updateRemoteCharacter(ch: Character, agent: RemoteAgentInput, repoName: string): void {
     ch.folderName = repoName;
     ch.isActive = agent.isActive;
+    ch.isWaiting = agent.isWaiting ?? false;
     ch.currentTool = agent.currentTool;
     ch.seatId = agent.seatId;
     if (ch.palette !== agent.palette) ch.palette = agent.palette;
