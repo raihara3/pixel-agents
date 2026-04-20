@@ -34,6 +34,17 @@ import { CharacterState, Direction, MATRIX_EFFECT_DURATION, TILE_SIZE } from '..
 import { createCharacter, updateCharacter } from './characters.js';
 import { matrixEffectSeeds } from './matrixEffect.js';
 
+/** Remote-agent fields mirrored from another VS Code window. */
+export interface RemoteAgentInput {
+  id: number;
+  palette: number;
+  hueShift: number;
+  seatId: string | null;
+  isActive: boolean;
+  currentTool: string | null;
+  bubbleType: 'permission' | 'waiting' | null;
+}
+
 export class OfficeState {
   layout: OfficeLayout;
   tileMap: TileTypeVal[][];
@@ -53,6 +64,17 @@ export class OfficeState {
   /** Reverse lookup: sub-agent character ID → parent info */
   subagentMeta: Map<number, { parentAgentId: number; parentToolId: string }> = new Map();
   private nextSubagentId = -1;
+  /** Mirrored agents from other VS Code windows. Key = `${windowId}:${agentId}`. */
+  remoteCharacters: Map<string, Character> = new Map();
+  /** Seat uids currently occupied by remote characters. Used by seat allocators
+   *  so local agents don't claim seats already mirrored from another window. */
+  remoteOccupiedSeats: Set<string> = new Set();
+  /** Synthetic id allocator for remote characters. Starts well below sub-agent ids
+   *  to avoid any collision with local/sub-agent id space. */
+  private nextRemoteId = -1_000_000;
+  /** Stable `remote-key → synthetic id` mapping so a remote character keeps the
+   *  same Character.id across snapshots. */
+  private remoteKeyToId: Map<string, number> = new Map();
 
   constructor(layout?: OfficeLayout) {
     this.layout = layout || createDefaultLayout();
@@ -139,6 +161,9 @@ export class OfficeState {
         this.relocateCharacterToWalkable(ch);
       }
     }
+
+    // Keep remote seat occupancy consistent with the new seat map.
+    this.rebuildRemoteOccupiedSeats();
   }
 
   /** Move a character to a random walkable tile */
@@ -192,6 +217,7 @@ export class OfficeState {
     const otherSeats: string[] = [];
     for (const [uid, seat] of this.seats) {
       if (seat.assigned) continue;
+      if (this.remoteOccupiedSeats.has(uid)) continue;
 
       // Check if this seat faces electronics (same logic as auto-state detection)
       let facesPC = false;
@@ -741,7 +767,15 @@ export class OfficeState {
 
       // Temporarily unblock own seat so character can pathfind to it
       this.withOwnSeatUnblocked(ch, () =>
-        updateCharacter(ch, dt, this.walkableTiles, this.seats, this.tileMap, this.blockedTiles),
+        updateCharacter(
+          ch,
+          dt,
+          this.walkableTiles,
+          this.seats,
+          this.tileMap,
+          this.blockedTiles,
+          this.remoteOccupiedSeats,
+        ),
       );
 
       // Tick bubble timer for waiting bubbles
@@ -757,15 +791,154 @@ export class OfficeState {
     for (const id of toDelete) {
       this.characters.delete(id);
     }
+
+    // Run FSM for mirrored remote characters (their seatId/isActive come from the
+    // remote window; the animation between states runs locally).
+    const remoteToDelete: string[] = [];
+    for (const [key, ch] of this.remoteCharacters) {
+      if (ch.matrixEffect) {
+        ch.matrixEffectTimer += dt;
+        if (ch.matrixEffectTimer >= MATRIX_EFFECT_DURATION) {
+          if (ch.matrixEffect === 'spawn') {
+            ch.matrixEffect = null;
+            ch.matrixEffectTimer = 0;
+            ch.matrixEffectSeeds = [];
+          } else {
+            remoteToDelete.push(key);
+          }
+        }
+        continue;
+      }
+      this.withOwnSeatUnblocked(ch, () =>
+        updateCharacter(
+          ch,
+          dt,
+          this.walkableTiles,
+          this.seats,
+          this.tileMap,
+          this.blockedTiles,
+          this.remoteOccupiedSeats,
+        ),
+      );
+      if (ch.bubbleType === 'waiting') {
+        ch.bubbleTimer -= dt;
+        if (ch.bubbleTimer <= 0) {
+          ch.bubbleType = null;
+          ch.bubbleTimer = 0;
+        }
+      }
+    }
+    for (const key of remoteToDelete) {
+      this.remoteCharacters.delete(key);
+      this.remoteKeyToId.delete(key);
+    }
+    // Rebuild remote seat occupancy after FSM tick (seatId may have changed).
+    this.rebuildRemoteOccupiedSeats();
   }
 
   getCharacters(): Character[] {
     return Array.from(this.characters.values());
   }
 
-  /** Get character at pixel position (for hit testing). Returns id or null. */
+  /** Render-time character list: local + remote mirrors, combined for z-sort. */
+  getAllCharactersForRender(): Character[] {
+    const local = Array.from(this.characters.values());
+    if (this.remoteCharacters.size === 0) return local;
+    return [...local, ...this.remoteCharacters.values()];
+  }
+
+  /**
+   * Apply a batch of remote window snapshots. New remote agents spawn with the
+   * matrix effect, existing ones update in place, and agents missing from the
+   * snapshot begin their despawn animation. Remote seat occupancy is recomputed
+   * so local seat allocators avoid already-taken seats.
+   */
+  setRemoteAgents(
+    windows: Array<{ windowId: string; repoName: string; agents: RemoteAgentInput[] }>,
+  ): void {
+    const seenKeys = new Set<string>();
+    for (const win of windows) {
+      for (const agent of win.agents) {
+        const key = `${win.windowId}:${agent.id}`;
+        seenKeys.add(key);
+        const existing = this.remoteCharacters.get(key);
+        if (existing) {
+          this.updateRemoteCharacter(existing, agent, win.repoName);
+        } else {
+          this.spawnRemoteCharacter(key, agent, win.repoName);
+        }
+      }
+    }
+    // Despawn any remote character no longer present in the snapshot.
+    for (const [key, ch] of this.remoteCharacters) {
+      if (seenKeys.has(key)) continue;
+      if (ch.matrixEffect === 'despawn') continue;
+      ch.matrixEffect = 'despawn';
+      ch.matrixEffectTimer = 0;
+      ch.matrixEffectSeeds = matrixEffectSeeds();
+      ch.bubbleType = null;
+    }
+    this.rebuildRemoteOccupiedSeats();
+  }
+
+  private spawnRemoteCharacter(key: string, agent: RemoteAgentInput, repoName: string): void {
+    let id = this.remoteKeyToId.get(key);
+    if (id === undefined) {
+      id = this.nextRemoteId--;
+      this.remoteKeyToId.set(key, id);
+    }
+    const seat = agent.seatId ? (this.seats.get(agent.seatId) ?? null) : null;
+    const ch = createCharacter(id, agent.palette, agent.seatId, seat, agent.hueShift);
+    ch.folderName = repoName;
+    ch.isActive = agent.isActive;
+    ch.currentTool = agent.currentTool;
+    ch.bubbleType = agent.bubbleType;
+    if (agent.bubbleType === 'waiting') {
+      ch.bubbleTimer = WAITING_BUBBLE_DURATION_SEC;
+    }
+    ch.matrixEffect = 'spawn';
+    ch.matrixEffectTimer = 0;
+    ch.matrixEffectSeeds = matrixEffectSeeds();
+    this.remoteCharacters.set(key, ch);
+  }
+
+  private updateRemoteCharacter(ch: Character, agent: RemoteAgentInput, repoName: string): void {
+    ch.folderName = repoName;
+    ch.isActive = agent.isActive;
+    ch.currentTool = agent.currentTool;
+    ch.seatId = agent.seatId;
+    if (ch.palette !== agent.palette) ch.palette = agent.palette;
+    if (ch.hueShift !== agent.hueShift) ch.hueShift = agent.hueShift;
+    if (ch.bubbleType !== agent.bubbleType) {
+      ch.bubbleType = agent.bubbleType;
+      ch.bubbleTimer = agent.bubbleType === 'waiting' ? WAITING_BUBBLE_DURATION_SEC : 0;
+    }
+  }
+
+  private rebuildRemoteOccupiedSeats(): void {
+    this.remoteOccupiedSeats.clear();
+    for (const ch of this.remoteCharacters.values()) {
+      if (ch.seatId && this.seats.has(ch.seatId)) {
+        this.remoteOccupiedSeats.add(ch.seatId);
+      }
+    }
+  }
+
+  /** Look up a character by id, checking local and mirrored remote characters. */
+  findAnyCharacter(id: number): Character | undefined {
+    const local = this.characters.get(id);
+    if (local) return local;
+    for (const ch of this.remoteCharacters.values()) {
+      if (ch.id === id) return ch;
+    }
+    return undefined;
+  }
+
+  /** Get character at pixel position (for hit testing). Returns id or null.
+   *  Includes mirrored remote characters so their overlays can show on hover;
+   *  callers that need local-only semantics should check `characters.has(id)`. */
   getCharacterAt(worldX: number, worldY: number): number | null {
-    const chars = this.getCharacters().sort((a, b) => b.y - a.y);
+    const chars = this.getAllCharactersForRender().sort((a, b) => b.y - a.y);
     for (const ch of chars) {
       // Skip characters that are despawning
       if (ch.matrixEffect === 'despawn') continue;

@@ -97,6 +97,9 @@ export function updateCharacter(
   seats: Map<string, Seat>,
   tileMap: TileTypeVal[][],
   blockedTiles: Set<string>,
+  /** Additional seats that are unavailable (e.g. occupied by mirrored remote
+   *  characters from other windows). Treated the same as `seat.assigned`. */
+  externallyOccupiedSeats?: Set<string>,
 ): void {
   ch.frameTimer += dt;
 
@@ -191,7 +194,7 @@ export function updateCharacter(
       if (ch.wanderTimer <= 0) {
         // Check if we've wandered enough — rest at a non-own seat (sofa, bench, empty chair)
         if (ch.wanderCount >= ch.wanderLimit) {
-          const restSeat = pickRestSeat(ch, seats);
+          const restSeat = pickRestSeat(ch, seats, externallyOccupiedSeats);
           if (restSeat) {
             const path = findPath(
               ch.tileCol,
@@ -359,11 +362,16 @@ export function getCharacterSprite(ch: Character, sprites: CharacterSprites): Sp
 
 /** Pick a random seat that is not the character's own seat and not assigned to any agent.
  *  Returns null when no suitable rest seat exists (falls back to continued wandering). */
-function pickRestSeat(ch: Character, seats: Map<string, Seat>): Seat | null {
+function pickRestSeat(
+  ch: Character,
+  seats: Map<string, Seat>,
+  externallyOccupiedSeats?: Set<string>,
+): Seat | null {
   const candidates: Seat[] = [];
   for (const seat of seats.values()) {
     if (seat.uid === ch.seatId) continue;
     if (seat.assigned) continue;
+    if (externallyOccupiedSeats && externallyOccupiedSeats.has(seat.uid)) continue;
     candidates.push(seat);
   }
   if (candidates.length === 0) return null;

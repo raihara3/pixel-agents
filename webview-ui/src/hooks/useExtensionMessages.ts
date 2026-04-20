@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { WINDOW_STATE_POLL_INTERVAL_MS } from '../constants.js';
 import { playDoneSound, playPermissionSound, setSoundEnabled } from '../notificationSound.js';
-import type { OfficeState } from '../office/engine/officeState.js';
+import type { OfficeState, RemoteAgentInput } from '../office/engine/officeState.js';
 import { setFloorSprites } from '../office/floorTiles.js';
 import { buildDynamicCatalog } from '../office/layout/furnitureCatalog.js';
 import { migrateLayoutColors } from '../office/layout/layoutSerializer.js';
@@ -506,12 +507,49 @@ export function useExtensionMessages(
       } else if (msg.type === 'agentTokenUsage') {
         const id = msg.id as number;
         os.setAgentTokens(id, msg.inputTokens as number, msg.outputTokens as number);
+      } else if (msg.type === 'remoteAgentsUpdated') {
+        const windows = (msg.windows ?? []) as Array<{
+          windowId: string;
+          repoName: string;
+          agents: RemoteAgentInput[];
+        }>;
+        os.setRemoteAgents(windows);
       }
     };
     window.addEventListener('message', handler);
     vscode.postMessage({ type: 'webviewReady' });
     return () => window.removeEventListener('message', handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [getOfficeState]);
+
+  // Publish our local agent state to the extension for cross-window mirroring.
+  // The extension writes ~/.pixel-agents/windows/<uuid>.json; other windows
+  // pick it up via their dir watcher. Polling keeps this logic out of every
+  // state-mutation path (simpler than hooking each message handler).
+  useEffect(() => {
+    let lastJson = '';
+    const interval = setInterval(() => {
+      const os = getOfficeState();
+      const agents: RemoteAgentInput[] = [];
+      for (const ch of os.characters.values()) {
+        if (ch.isSubagent) continue;
+        agents.push({
+          id: ch.id,
+          palette: ch.palette,
+          hueShift: ch.hueShift,
+          seatId: ch.seatId,
+          isActive: ch.isActive,
+          currentTool: ch.currentTool,
+          bubbleType: ch.bubbleType,
+        });
+      }
+      agents.sort((a, b) => a.id - b.id);
+      const json = JSON.stringify(agents);
+      if (json === lastJson) return;
+      lastJson = json;
+      vscode.postMessage({ type: 'updateWindowState', agents });
+    }, WINDOW_STATE_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
   }, [getOfficeState]);
 
   return {

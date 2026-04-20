@@ -5,6 +5,12 @@ export const CONFIG_FILE_NAME = 'config.json';
 export const LAYOUT_FILE_POLL_INTERVAL_MS = 2000;
 export const LAYOUT_REVISION_KEY = 'layoutRevision';
 
+// ── Cross-window Agent Mirroring ──────────────────────────────
+export const WINDOWS_DIR_NAME = 'windows';
+export const WINDOW_FILE_POLL_INTERVAL_MS = 2000;
+/** Files older than this are treated as abandoned (crashed windows) and skipped/pruned. */
+export const WINDOW_FILE_STALE_MS = 5 * 60 * 1000;
+
 // ── Settings Persistence (VS Code globalState keys) ─────────
 export const GLOBAL_KEY_SOUND_ENABLED = 'pixel-agents.soundEnabled';
 export const GLOBAL_KEY_LAST_SEEN_VERSION = 'pixel-agents.lastSeenVersion';

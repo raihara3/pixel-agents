@@ -258,7 +258,7 @@ export function OfficeCanvas({
           h,
           officeState.tileMap,
           officeState.furniture,
-          officeState.getCharacters(),
+          officeState.getAllCharactersForRender(),
           zoom,
           panRef.current.x,
           panRef.current.y,
@@ -674,6 +674,9 @@ export function OfficeCanvas({
 
       const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY);
       if (hitId !== null) {
+        // Remote (mirrored) characters are observational only — no selection,
+        // no terminal focus, no bubble dismissal.
+        if (!officeState.characters.has(hitId)) return;
         // Dismiss any active bubble on click
         officeState.dismissBubble(hitId);
         // Toggle selection: click same agent deselects, different agent selects

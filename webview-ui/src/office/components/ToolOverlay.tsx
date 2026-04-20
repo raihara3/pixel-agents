@@ -59,6 +59,18 @@ function getActivityText(
   return 'Idle';
 }
 
+/** Remote (mirrored) agents don't have a detailed tool-activity list, so the
+ *  overlay is derived entirely from their mirrored scalar fields. */
+function getRemoteActivityText(ch: {
+  isActive: boolean;
+  currentTool: string | null;
+  bubbleType: 'permission' | 'waiting' | null;
+}): string {
+  if (ch.bubbleType === 'permission') return 'Needs approval';
+  if (!ch.isActive) return 'Idle';
+  return ch.currentTool ?? 'Working';
+}
+
 function getFuelColor(ratio: number): string {
   if (ratio >= TOKEN_CRITICAL_THRESHOLD) return FUEL_COLOR_CRITICAL;
   if (ratio >= TOKEN_DANGER_THRESHOLD) return FUEL_COLOR_DANGER;
@@ -103,18 +115,25 @@ export function ToolOverlay({
   const selectedId = officeState.selectedAgentId;
   const hoveredId = officeState.hoveredAgentId;
 
-  // All character IDs
-  const allIds = [...agents, ...subagentCharacters.map((s) => s.id)];
+  // Collect ids from local agents + sub-agents + mirrored remotes.
+  // Remotes are tracked via their synthetic Character.id so hover/selection
+  // logic works uniformly, but they aren't user-selectable so isSelected stays
+  // false for them (OfficeCanvas click handler skips remote hits).
+  const allIds: number[] = [...agents, ...subagentCharacters.map((s) => s.id)];
+  for (const ch of officeState.remoteCharacters.values()) {
+    allIds.push(ch.id);
+  }
 
   return (
     <>
       {allIds.map((id) => {
-        const ch = officeState.characters.get(id);
+        const ch = officeState.findAnyCharacter(id);
         if (!ch) return null;
 
         const isSelected = selectedId === id;
         const isHovered = hoveredId === id;
         const isSub = ch.isSubagent;
+        const isRemote = !officeState.characters.has(id);
 
         // Only show for hovered or selected agents (unless always-show is on)
         if (!alwaysShowOverlay && !isSelected && !isHovered) return null;
@@ -128,7 +147,9 @@ export function ToolOverlay({
         // Get activity text
         const subHasPermission = isSub && ch.bubbleType === 'permission';
         let activityText: string;
-        if (isSub) {
+        if (isRemote) {
+          activityText = getRemoteActivityText(ch);
+        } else if (isSub) {
           if (subHasPermission) {
             activityText = 'Needs approval';
           } else {
@@ -139,10 +160,14 @@ export function ToolOverlay({
           activityText = getActivityText(id, agentTools, ch.isActive);
         }
 
-        // Determine dot color
-        const tools = agentTools[id];
-        const hasPermission = subHasPermission || tools?.some((t) => t.permissionWait && !t.done);
-        const hasActiveTools = tools?.some((t) => !t.done);
+        // Determine dot color. Remote agents don't have a tool-activity list;
+        // derive state from their mirrored scalar fields instead.
+        const tools = isRemote ? undefined : agentTools[id];
+        const remotePermission = isRemote && ch.bubbleType === 'permission';
+        const remoteActiveTool = isRemote && ch.isActive && ch.currentTool !== null;
+        const hasPermission =
+          subHasPermission || remotePermission || tools?.some((t) => t.permissionWait && !t.done);
+        const hasActiveTools = remoteActiveTool || tools?.some((t) => !t.done);
         const isActive = ch.isActive;
 
         let dotColor: string | null = null;

@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -64,6 +65,8 @@ import type { LayoutWatcher } from './layoutPersistence.js';
 import { readLayoutFromFile, watchLayoutFile, writeLayoutToFile } from './layoutPersistence.js';
 import { setHookProvider } from './transcriptParser.js';
 import type { AgentState } from './types.js';
+import type { WindowAgentSnapshot, WindowsDirWatcher } from './windowStatePersistence.js';
+import { cleanupOwnFile, watchWindowsDir, writeOwnState } from './windowStatePersistence.js';
 
 export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   nextAgentId = { current: 1 };
@@ -101,6 +104,10 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 
   // Cross-window layout sync
   layoutWatcher: LayoutWatcher | null = null;
+
+  // Cross-window agent mirroring
+  private readonly windowId = crypto.randomUUID();
+  private windowsWatcher: WindowsDirWatcher | null = null;
 
   // Pixel Agents Server (hook event reception)
   private pixelAgentsServer: PixelAgentsServer | null = null;
@@ -401,6 +408,9 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
       } else if (message.type === 'saveLayout') {
         this.layoutWatcher?.markOwnWrite();
         writeLayoutToFile(message.layout as Record<string, unknown>);
+      } else if (message.type === 'updateWindowState') {
+        const agents = (message.agents as WindowAgentSnapshot[] | undefined) ?? [];
+        this.writeWindowStateSnapshot(agents);
       } else if (message.type === 'setSoundEnabled') {
         this.context.globalState.update(GLOBAL_KEY_SOUND_ENABLED, message.enabled);
       } else if (message.type === 'setLastSeenVersion') {
@@ -688,6 +698,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
             // Send agent statuses AFTER layoutLoaded so characters exist when messages arrive
             sendCurrentAgentStatuses(this.agents, this.webview);
             this.startLayoutWatcher();
+            this.startWindowsWatcher();
           }
         })();
         sendExistingAgents(this.agents, this.context, this.webview);
@@ -927,6 +938,46 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  /** Resolve this window's workspace identity for mirroring. Returns null for
+   *  empty workspaces (no folders) — mirroring is disabled in that case. */
+  private getWorkspaceIdentity(): { repoPath: string; repoName: string } | null {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) return null;
+    const first = folders[0];
+    return { repoPath: first.uri.fsPath, repoName: first.name };
+  }
+
+  /** Wrap the webview-provided agent snapshot with window metadata and write to disk. */
+  private writeWindowStateSnapshot(agents: WindowAgentSnapshot[]): void {
+    const identity = this.getWorkspaceIdentity();
+    if (!identity) return;
+    writeOwnState({
+      version: 1,
+      windowId: this.windowId,
+      repoPath: identity.repoPath,
+      repoName: identity.repoName,
+      updatedAt: Date.now(),
+      agents,
+    });
+  }
+
+  private startWindowsWatcher(): void {
+    if (this.windowsWatcher) return;
+    const identity = this.getWorkspaceIdentity();
+    if (!identity) return;
+    this.windowsWatcher = watchWindowsDir(
+      this.windowId,
+      () => {
+        // Re-read identity each poll so the dedup filter tracks folder changes.
+        const current = this.getWorkspaceIdentity();
+        return current ? current.repoPath : identity.repoPath;
+      },
+      (windows) => {
+        this.webview?.postMessage({ type: 'remoteAgentsUpdated', windows });
+      },
+    );
+  }
+
   dispose() {
     this.pixelAgentsServer?.stop();
     this.pixelAgentsServer = null;
@@ -934,6 +985,9 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     this.hookEventHandler = null;
     this.layoutWatcher?.dispose();
     this.layoutWatcher = null;
+    this.windowsWatcher?.dispose();
+    this.windowsWatcher = null;
+    cleanupOwnFile(this.windowId);
     for (const id of [...this.agents.keys()]) {
       removeAgent(
         id,
