@@ -10,6 +10,18 @@ export const WINDOWS_DIR_NAME = 'windows';
 export const WINDOW_FILE_POLL_INTERVAL_MS = 2000;
 /** Files older than this are treated as abandoned (crashed windows) and skipped/pruned. */
 export const WINDOW_FILE_STALE_MS = 5 * 60 * 1000;
+/**
+ * Interval for re-writing our own window state file even when the agent snapshot
+ * hasn't changed. Keeps `updatedAt` fresh so idle windows aren't pruned by peers.
+ * Must be well below WINDOW_FILE_STALE_MS.
+ */
+export const WINDOW_STATE_HEARTBEAT_MS = 60 * 1000;
+/**
+ * If `Date.now()` advances by more than this between watcher polls, assume the
+ * machine just woke from sleep and grant every remote file a one-round grace
+ * period before pruning (their heartbeats need a moment to catch up).
+ */
+export const WINDOW_WAKE_TIME_JUMP_MS = 60 * 1000;
 
 // ── Settings Persistence (VS Code globalState keys) ─────────
 export const GLOBAL_KEY_SOUND_ENABLED = 'pixel-agents.soundEnabled';

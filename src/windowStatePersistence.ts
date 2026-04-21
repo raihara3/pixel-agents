@@ -6,6 +6,7 @@ import {
   LAYOUT_FILE_DIR,
   WINDOW_FILE_POLL_INTERVAL_MS,
   WINDOW_FILE_STALE_MS,
+  WINDOW_WAKE_TIME_JUMP_MS,
   WINDOWS_DIR_NAME,
 } from './constants.js';
 
@@ -96,12 +97,19 @@ function readWindowFile(filePath: string): WindowStateFile | null {
  * Read all windows' state files, skip own + stale files + same-repo files, and
  * apply last-write-wins dedup per repoPath.
  *
- * @param ownWindowId  This window's UUID (excluded from result)
- * @param ownRepoPath  This window's workspace path (other files matching this are
- *                     skipped to avoid duplicate mirroring when the same repo is
- *                     open in multiple windows — own agents already shown locally)
+ * @param ownWindowId   This window's UUID (excluded from result)
+ * @param ownRepoPath   This window's workspace path (other files matching this are
+ *                      skipped to avoid duplicate mirroring when the same repo is
+ *                      open in multiple windows — own agents already shown locally)
+ * @param skipPrune     When true, keep stale files in the result and do not delete
+ *                      them. Used immediately after a detected wake-from-sleep so
+ *                      peer windows get a round to refresh their own heartbeats.
  */
-export function readRemoteWindows(ownWindowId: string, ownRepoPath: string): RemoteWindow[] {
+export function readRemoteWindows(
+  ownWindowId: string,
+  ownRepoPath: string,
+  skipPrune = false,
+): RemoteWindow[] {
   const dir = getWindowsDir();
   if (!fs.existsSync(dir)) return [];
 
@@ -123,14 +131,18 @@ export function readRemoteWindows(ownWindowId: string, ownRepoPath: string): Rem
     if (!state) continue;
     if (state.windowId === ownWindowId) continue;
 
-    // Prune stale files (crashed windows) and skip them
-    if (now - state.updatedAt > WINDOW_FILE_STALE_MS) {
-      try {
-        fs.unlinkSync(filePath);
-      } catch {
-        /* another window may have already pruned it */
+    const isStale = now - state.updatedAt > WINDOW_FILE_STALE_MS;
+    if (isStale) {
+      if (!skipPrune) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch {
+          /* another window may have already pruned it */
+        }
+        continue;
       }
-      continue;
+      // Wake-grace: keep the stale file around so its window has a chance to
+      // refresh before we treat it as crashed.
     }
 
     // Same-repo dedup: skip remotes from our own repo path. Our own agents are
@@ -166,10 +178,16 @@ export function watchWindowsDir(
   let fsWatcher: fs.FSWatcher | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
+  // Tracks the wall-clock time of the previous emit so we can detect large
+  // jumps (PC sleep/wake) and grant peers a one-round prune grace period.
+  let lastEmitAt = Date.now();
 
   function emit(): void {
     if (disposed) return;
-    const windows = readRemoteWindows(ownWindowId, getOwnRepoPath());
+    const now = Date.now();
+    const justWoke = now - lastEmitAt > WINDOW_WAKE_TIME_JUMP_MS;
+    lastEmitAt = now;
+    const windows = readRemoteWindows(ownWindowId, getOwnRepoPath(), justWoke);
     onUpdate(windows);
   }
 

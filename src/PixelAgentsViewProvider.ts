@@ -46,6 +46,7 @@ import {
   GLOBAL_KEY_SOUND_ENABLED,
   GLOBAL_KEY_WATCH_ALL_SESSIONS,
   LAYOUT_REVISION_KEY,
+  WINDOW_STATE_HEARTBEAT_MS,
   WORKSPACE_KEY_AGENT_SEATS,
 } from './constants.js';
 import {
@@ -108,6 +109,10 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   // Cross-window agent mirroring
   private readonly windowId = crypto.randomUUID();
   private windowsWatcher: WindowsDirWatcher | null = null;
+  /** Most recent snapshot received from the webview; re-used by the heartbeat
+   *  timer to refresh `updatedAt` when no state changes have occurred. */
+  private lastWindowAgents: WindowAgentSnapshot[] | null = null;
+  private windowStateHeartbeat: ReturnType<typeof setInterval> | null = null;
 
   // Pixel Agents Server (hook event reception)
   private pixelAgentsServer: PixelAgentsServer | null = null;
@@ -699,6 +704,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
             sendCurrentAgentStatuses(this.agents, this.webview);
             this.startLayoutWatcher();
             this.startWindowsWatcher();
+            this.startWindowStateHeartbeat();
           }
         })();
         sendExistingAgents(this.agents, this.context, this.webview);
@@ -951,6 +957,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   private writeWindowStateSnapshot(agents: WindowAgentSnapshot[]): void {
     const identity = this.getWorkspaceIdentity();
     if (!identity) return;
+    this.lastWindowAgents = agents;
     writeOwnState({
       version: 1,
       windowId: this.windowId,
@@ -959,6 +966,20 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
       updatedAt: Date.now(),
       agents,
     });
+  }
+
+  /**
+   * Periodically re-write our window state file with a fresh `updatedAt` even
+   * when the agent snapshot hasn't changed. Without this, idle windows get
+   * pruned by peers after WINDOW_FILE_STALE_MS since the webview short-circuits
+   * on unchanged payloads.
+   */
+  private startWindowStateHeartbeat(): void {
+    if (this.windowStateHeartbeat) return;
+    this.windowStateHeartbeat = setInterval(() => {
+      if (!this.lastWindowAgents) return;
+      this.writeWindowStateSnapshot(this.lastWindowAgents);
+    }, WINDOW_STATE_HEARTBEAT_MS);
   }
 
   private startWindowsWatcher(): void {
@@ -987,6 +1008,10 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     this.layoutWatcher = null;
     this.windowsWatcher?.dispose();
     this.windowsWatcher = null;
+    if (this.windowStateHeartbeat) {
+      clearInterval(this.windowStateHeartbeat);
+      this.windowStateHeartbeat = null;
+    }
     cleanupOwnFile(this.windowId);
     for (const id of [...this.agents.keys()]) {
       removeAgent(
